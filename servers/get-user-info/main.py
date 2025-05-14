@@ -1,63 +1,72 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-import aiohttp
-import os
 
-OPEN_WEBUI_BASE_URL = os.getenv("OPEN_WEBUI_BASE_URL", "http://localhost:8080")
+from fastapi import FastAPI
+from typing import List, Optional
+from pydantic import BaseModel
+import uuid
 
-app = FastAPI(
-    title="User Info Proxy API",
-    version="1.0.0",
-    description="Fetch user details from the internal authentication server.",
-)
+app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # You may restrict this to certain domains
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Models
+class Company(BaseModel):
+    company_name: str
+    country: str
+    city: str
+    address: str
+    description: str
+    website: Optional[str] = None
 
+class WTSListing(BaseModel):
+    company_id: str
+    product_name: str
+    quantity: int
+    price: float
+    currency: str
+    description: Optional[str] = None
 
-@app.get(
-    "/get_session_user_info",
-    summary="Forward auth token and retrieve session user details",
-    description="Get user info from internal auth service using Authorization Bearer token.",
-)
-async def get_session_user_info(request: Request):
-    auth_header = request.headers.get("Authorization")
+# In-memory "databases"
+companies_db = []
+wts_db = []
 
-    print(f"Received Authorization header: {auth_header}")
+@app.get("/")
+async def root():
+    return {"message": "GSMAuth Server Running"}
 
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401, detail="Missing or invalid Authorization header"
-        )
+@app.get("/openapi.json", include_in_schema=False)
+async def custom_openapi():
+    from fastapi.openapi.utils import get_openapi
+    return get_openapi(title="GSMAuth API", version="1.0.0", routes=app.routes)
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{OPEN_WEBUI_BASE_URL}/api/v1/auths/",
-                headers={"Authorization": auth_header},
-                timeout=aiohttp.ClientTimeout(total=10.0),
-            ) as resp:
+@app.post("/insert_company")
+async def insert_company(company: Company):
+    company_id = str(uuid.uuid4())
+    companies_db.append({"id": company_id, **company.dict()})
+    return {"success": True, "company_id": company_id}
 
-                if resp.status != 200:
-                    raise HTTPException(
-                        status_code=resp.status, detail="Failed to retrieve user info"
-                    )
+@app.post("/insert_bulk_companies")
+async def insert_bulk_companies(companies: List[Company]):
+    inserted = []
+    for company in companies:
+        company_id = str(uuid.uuid4())
+        companies_db.append({"id": company_id, **company.dict()})
+        inserted.append(company_id)
+    return {"success": True, "company_ids": inserted}
 
-                data = await resp.json()
+@app.get("/search_companies")
+async def search_companies(search_term: str):
+    results = [c for c in companies_db if search_term.lower() in c["company_name"].lower()]
+    return {"results": results}
 
-                return {
-                    "id": data.get("id"),
-                    "role": data.get("role"),
-                    "name": data.get("name"),
-                    "email": data.get("email"),
-                }
+@app.post("/insert_wts")
+async def insert_wts(wts: WTSListing):
+    wts_id = str(uuid.uuid4())
+    wts_db.append({"id": wts_id, **wts.dict()})
+    return {"success": True, "wts_id": wts_id}
 
-    except aiohttp.ClientError as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Error connecting to auth service: {exc}"
-        )
+@app.post("/insert_bulk_wts")
+async def insert_bulk_wts(wts_list: List[WTSListing]):
+    inserted = []
+    for wts in wts_list:
+        wts_id = str(uuid.uuid4())
+        wts_db.append({"id": wts_id, **wts.dict()})
+        inserted.append(wts_id)
+    return {"success": True, "wts_ids": inserted}
